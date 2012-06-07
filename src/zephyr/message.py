@@ -18,7 +18,9 @@ SummaryMessage = collections.namedtuple("SummaryMessage",
 SignalPacket = collections.namedtuple("SignalPacket", ["type", "timestamp", "samplerate",
                                                        "samples", "sequence_number"])
 
-
+Acknowledgement = collections.namedtuple("Acknowledgement", ["ack", "msg_id"])
+BatteryStatus = collections.namedtuple("BatteryStatus", ["voltage", "charge_percent"])
+Lifesign = collections.namedtuple("Lifesign", [])
 
 
 #Specification of HxM payload bytes:
@@ -89,6 +91,16 @@ def parse_summary_packet(payload):
     return message
 
 
+def parse_battery_message(payload):
+    lsb, msb = payload[:2]
+    voltage = (lsb + (msb << 8))/1e3    
+    charge_percent = payload[2]
+           
+    message = BatteryStatus(voltage=voltage, charge_percent=charge_percent)
+    
+    return message
+
+
 def signal_packet_payload_parser_factory(sample_parser, signal_code, samplerate):
     def parse_signal_packet(payload):
         sequence_number = payload[0]
@@ -135,9 +147,18 @@ class MessagePayloadParser:
         self.callback = callback
     
     def handle_message(self, message_frame):
+        message = None
         handler = MESSAGE_TYPES.get(message_frame.message_id)
+        
         if handler is not None:
             message = handler(message_frame.payload)
+        # Encapsulate acknowledgment messages that have no payload
+        elif message_frame.eom == 'ACK' and len(message_frame.payload) == 0:
+            message = Acknowledgement(ack=True, msg_id=message_frame.message_id)
+        elif message_frame.eom == 'NAK' and len(message_frame.payload) == 0:
+            message = Acknowledgement(ack=False, msg_id=message_frame.message_id)
+            
+        if message:
             self.callback(message)
 
 
@@ -146,4 +167,6 @@ MESSAGE_TYPES = {0x2B: parse_summary_packet,
                  0x22: signal_packet_payload_parser_factory(parse_10_bit_samples, "ecg", 250.0),
                  0x24: signal_packet_payload_parser_factory(parse_16_bit_samples, "rr", 18.0),
                  0x25: signal_packet_payload_parser_factory(parse_accelerometer_samples, "acceleration", 50.0),
+                 0xAC: parse_battery_message,
+                 0x23: lambda x: Lifesign(),
                  0x26: parse_hxm_message}
