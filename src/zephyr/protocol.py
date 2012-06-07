@@ -2,6 +2,8 @@
 import time
 import csv
 import logging
+import struct
+import datetime
 
 import zephyr.util
 
@@ -63,6 +65,13 @@ class Protocol:
         except KeyboardInterrupt:
             logging.info("Received Ctrl-C, exiting")
 
+BH_STATE_MSGS = {'general': 0x14,
+                 'breathing': 0x15,
+                 'ecg': 0x16,
+                 'rr': 0x19,
+                 'accelerometer': 0x1E,
+                 'accelerometer100mg': 0xBC
+                 }  
 
 class BioHarnessProtocol(Protocol):
     def enable_ecg_waveform(self):
@@ -87,6 +96,47 @@ class BioHarnessProtocol(Protocol):
         self.enable_accelerometer_waveform()
         self.set_summary_packet_transmit_interval_to_one_second()
 
+    def set_message_state(self, msg_name, is_enabled):
+        ''' See BH_STATE_MSGS dictionary for supported messages '''
+        
+        if msg_name not in BH_STATE_MSGS:
+            raise ProtocolError('unknown message')
+            
+        self.send_message(BH_STATE_MSGS[msg_name], [int(is_enabled)])
+        
+    def set_all_message_states(self, is_enabled):
+        for msg_id in BH_STATE_MSGS.values():
+            self.send_message(msg_id, [int(is_enabled)])
+        
+        self.set_summary_packet_transmit_interval(int(is_enabled))
+
+    def set_summary_packet_transmit_interval(self, seconds):
+        msg = struct.pack('<H', seconds)
+        self.send_message(0xBD, [ord(c) for c in msg])
+
+    def send_lifesign(self):
+        ''' Send Lifesign (ping) message to BH '''
+
+        self.send_message(0x23, [])   
+        
+    def sync_rtc(self):
+        ''' Sync the RTC on the BH with the local time '''
+        
+        now = datetime.datetime.now()
+        year_lsb = now.year & 0xFF
+        year_msb = now.year >> 8
+        
+        msg = [now.day, now.month, 
+               year_lsb, year_msb,
+               now.hour, now.minute, now.second]
+
+        self.send_message(0x07, msg)  
+
+    def reboot(self):
+        ''' Send reboot request to BH '''
+        
+        REBOOT_MAGIC = 'ZReBoot'
+        self.send_message(0x1F, [ord(c) for c in REBOOT_MAGIC])
 
 def create_message_frame(message_id, payload):
     dlc = len(payload)
